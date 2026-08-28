@@ -18,4 +18,7 @@ p256 = { version = "0.13", features = ["ecdsa"] }
 # code that touches it is gated behind #[cfg(target_arch = "wasm32")], so the
 # pure verification/config logic stays host-testable via `cargo test`.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-fastly = "0.13"
+# Pinned exactly: 0.13.1 added a host import (cache_override_v3_set) that
+# standalone Viceroy 0.20.1 doesn't implement yet, so `=0.13.0` is what's
+# actually been run under Viceroy locally.
+fastly = "=0.13.0"

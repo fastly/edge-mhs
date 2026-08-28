@@ -72,14 +72,29 @@ const MAX_RESPONSE_BYTES: usize = 1_048_576;
 /// can't stall the edge request indefinitely (same guidance edge-mcp gives
 /// for its `issuer_jwks` backend).
 #[cfg(target_arch = "wasm32")]
-pub struct FastlyBackendProxy;
+pub struct FastlyBackendProxy {
+    /// Absolute base URL for the MHS driver's tool-call endpoint (e.g.
+    /// `https://mhs-driver.internal.example.com` in production, or
+    /// `http://127.0.0.1:PORT` against a local mock under Viceroy). Kept
+    /// separate from the backend *name* (`request.backend`, used for
+    /// `.send()` routing) exactly like `mcp-fastly`'s `jwks_uri`/
+    /// `jwks_backend` split.
+    base_url: String,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl FastlyBackendProxy {
+    pub fn new(base_url: impl Into<String>) -> Self {
+        FastlyBackendProxy { base_url: base_url.into() }
+    }
+}
 
 #[cfg(target_arch = "wasm32")]
 impl BackendProxy for FastlyBackendProxy {
     fn forward(&self, request: &ProxyRequest) -> Result<ProxyResponse, ProxyError> {
         use std::io::Read;
 
-        let mut out = fastly::Request::post(format!("https://{}/mhs/tool-call", request.backend));
+        let mut out = fastly::Request::post(format!("{}/mhs/tool-call", self.base_url));
         for (k, v) in &request.headers {
             out.set_header(k.as_str(), v.as_str());
         }

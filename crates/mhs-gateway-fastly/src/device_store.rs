@@ -49,20 +49,24 @@ mod wasm_impl {
     }
 
     /// Fetches a device's limits from the MHS device-metadata backend at
-    /// `GET https://<backend>/mhs/devices/<device_id>/limits`.
+    /// `GET <base_url>/mhs/devices/<device_id>/limits`. `base_url` and
+    /// `backend_name` are kept separate exactly like `mcp-fastly`'s
+    /// `jwks_uri`/`jwks_backend` split, so the backend name (used only for
+    /// `.send()` routing) doesn't have to double as a real hostname.
     pub struct BackendLimitsSource {
         backend_name: String,
+        base_url: String,
     }
 
     impl BackendLimitsSource {
-        pub fn new(backend_name: impl Into<String>) -> Self {
-            BackendLimitsSource { backend_name: backend_name.into() }
+        pub fn new(backend_name: impl Into<String>, base_url: impl Into<String>) -> Self {
+            BackendLimitsSource { backend_name: backend_name.into(), base_url: base_url.into() }
         }
     }
 
     impl LimitsSource for BackendLimitsSource {
         fn fetch(&self, device_id: &str) -> Result<Option<DeviceLimits>, RegistryError> {
-            let url = format!("https://{}/mhs/devices/{device_id}/limits", self.backend_name);
+            let url = format!("{}/mhs/devices/{device_id}/limits", self.base_url);
             let resp = Request::get(url)
                 .send(&self.backend_name)
                 .map_err(|e| RegistryError(format!("device metadata fetch failed: {e}")))?;

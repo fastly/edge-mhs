@@ -17,4 +17,5 @@ sha2 = "0.10"
 # #[cfg(target_arch = "wasm32")] touches it, so the decision/formatting logic
 # stays host-testable via `cargo test`.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-fastly = "0.13"
+# See crates/mcp-fastly/Cargo.toml for why this is pinned exactly.
+fastly = "=0.13.0"

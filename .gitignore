@@ -1,7 +1,9 @@
 /target
 **/target
-/bin/*.wasm
-/data/
+bin/
+.fastly/
+pkg/
+data/
 /docs/superpowers/specs/
 
 # local secrets used for Viceroy runs

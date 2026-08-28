@@ -1,0 +1,69 @@
+# Fastly Compute manifest for the MHS edge gateway.
+#
+# mcp-core and mcp-fastly are reused, unmodified, from fastly/edge-mcp
+# (Apache-2.0). The MHS-specific crates (mhs-safety-policy,
+# mhs-device-registry, mhs-gateway-fastly) plus gateway-server are new.
+manifest_version = 3
+name = "mhs-edge-gateway"
+description = "Edge security gateway for Model Hardware Standard (MHS) device control over MCP"
+language = "rust"
+authors = ["austin@fastly.com"]
+
+[scripts]
+build = "cargo build --release --target wasm32-wasip1 --package gateway-server && cp target/wasm32-wasip1/release/gateway-server.wasm bin/main.wasm"
+
+# --- Local (Viceroy) resource bindings -------------------------------------
+# Mirrors edge-mcp's own split: this manifest is secure by default (auth
+# required); local unauthenticated runs use the clearly-labelled
+# fastly.demo.toml instead. Production provisioning (real KV/Secret/Config
+# Stores, rate counters, penalty boxes, the audit log endpoint, and the
+# backends below) is a deployment step, not something this repo does for you.
+
+[local_server]
+
+[local_server.kv_stores]
+task_store = { file = "data/kv_tasks.json", format = "json" }
+jwks_cache = { file = "data/kv_jwks.json", format = "json" }
+idempotency = { file = "data/kv_idem.json", format = "json" }
+device_limits_cache = { file = "data/kv_device_limits.json", format = "json" }
+
+[local_server.secret_stores]
+[[local_server.secret_stores.auth]]
+key = "mrtr-aead-key-1"
+# 32-byte AEAD key (raw or base64). Set SECRET_MRTR_AEAD_KEY_1 for local runs.
+# Rotate by adding mrtr-aead-key-2 and setting signer_current_kid=2.
+env = "SECRET_MRTR_AEAD_KEY_1"
+
+[local_server.config_stores.verifier]
+format = "inline-toml"
+[local_server.config_stores.verifier.contents]
+# Secure by default: authentication is REQUIRED. Replace the issuer /
+# audience / jwks_uri / protected-resource-metadata placeholders with your
+# real values, and the mhs_*_base_url placeholders with your real MHS
+# device-metadata and driver-runtime endpoints, before deploying. To run
+# locally WITHOUT auth against a mock MHS backend, use `fastly.demo.toml`
+# instead — do not disable auth here.
+auth_required = "true"
+issuer = "https://issuer.example.com"
+audience = "https://mhs-gateway.example.com"
+jwks_uri = "https://issuer.example.com/.well-known/jwks.json"
+protected_resource_metadata_url = "https://mhs-gateway.example.com/.well-known/oauth-protected-resource"
+max_body_bytes = "1048576"
+mhs_registry_base_url = "https://mhs-registry.example.com"
+mhs_driver_base_url = "https://mhs-driver.example.com"
+
+# The JWKS fetch may only target this statically-declared backend — a
+# natural SSRF allowlist (Compute can only reach declared backends).
+[local_server.backends.issuer_jwks]
+url = "https://issuer.example.com"
+override_host = "issuer.example.com"
+
+# The MHS device-metadata and driver-runtime backends. Point these at the
+# real MHS device-discovery service and driver runtime for your deployment.
+[local_server.backends.mhs_registry]
+url = "https://mhs-registry.example.com"
+override_host = "mhs-registry.example.com"
+
+[local_server.backends.mhs_driver]
+url = "https://mhs-driver.example.com"
+override_host = "mhs-driver.example.com"

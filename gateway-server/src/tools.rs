@@ -7,6 +7,7 @@
 //! machine's `Range` (temperature bound) and a robot arm's `Allowed` (axis
 //! enum) plus a second `Range` (angle bound).
 
+use fastly::config_store::ConfigStore;
 use mcp_core::Router;
 use mhs_device_registry::DeviceRegistry;
 use mhs_gateway_fastly::audit::FastlyLogAuditLogger;
@@ -23,15 +24,25 @@ const LIMITS_MAX_AGE_SECS: u64 = 3600;
 
 pub fn register_handlers(router: &mut Router) {
     router.with_server_info(json!({ "name": "mhs-edge-gateway", "version": "0.1.0" }));
+    // Shares the "verifier" Config Store mcp-fastly's VerifierConfig already
+    // reads from, rather than provisioning a second store for two strings.
+    let config = ConfigStore::try_open("verifier").expect("verifier Config Store must exist");
+    let registry_base_url = config
+        .get("mhs_registry_base_url")
+        .expect("mhs_registry_base_url must be set in the verifier Config Store");
+    let driver_base_url = config
+        .get("mhs_driver_base_url")
+        .expect("mhs_driver_base_url must be set in the verifier Config Store");
+
     router
-        .register_tool(qpcr_set_temperature())
-        .register_tool(robot_arm_move_joint());
+        .register_tool(qpcr_set_temperature(&registry_base_url, &driver_base_url))
+        .register_tool(robot_arm_move_joint(&registry_base_url, &driver_base_url));
 }
 
-fn registry_for(device_metadata_backend: &str) -> DeviceRegistry<KvLimitsCache, BackendLimitsSource> {
+fn registry_for(base_url: &str) -> DeviceRegistry<KvLimitsCache, BackendLimitsSource> {
     DeviceRegistry::new(
         KvLimitsCache,
-        BackendLimitsSource::new(device_metadata_backend),
+        BackendLimitsSource::new("mhs_registry", base_url),
         LIMITS_MAX_AGE_SECS,
     )
 }
@@ -44,7 +55,7 @@ fn audit_logger() -> FastlyLogAuditLogger {
     FastlyLogAuditLogger::open("mhs_audit").expect("mhs_audit log endpoint must be configured")
 }
 
-fn qpcr_set_temperature() -> DeviceToolHandler {
+fn qpcr_set_temperature(registry_base_url: &str, driver_base_url: &str) -> DeviceToolHandler {
     DeviceToolHandler::new(
         DeviceToolConfig {
             device_id: "qpcr-1".into(),
@@ -62,14 +73,14 @@ fn qpcr_set_temperature() -> DeviceToolHandler {
             window_secs: 60,
             penalty_ttl_secs: 60,
         },
-        Box::new(registry_for("mhs_registry")),
+        Box::new(registry_for(registry_base_url)),
         Box::new(FastlyErlRateLimiter::open("mhs_rate_counter", "mhs_penalty_box")),
         Box::new(audit_logger()),
-        Box::new(FastlyBackendProxy),
+        Box::new(FastlyBackendProxy::new(driver_base_url)),
     )
 }
 
-fn robot_arm_move_joint() -> DeviceToolHandler {
+fn robot_arm_move_joint(registry_base_url: &str, driver_base_url: &str) -> DeviceToolHandler {
     DeviceToolHandler::new(
         DeviceToolConfig {
             device_id: "robot-arm-2".into(),
@@ -90,9 +101,9 @@ fn robot_arm_move_joint() -> DeviceToolHandler {
             window_secs: 10,
             penalty_ttl_secs: 300,
         },
-        Box::new(registry_for("mhs_registry")),
+        Box::new(registry_for(registry_base_url)),
         Box::new(FastlyErlRateLimiter::open("mhs_rate_counter", "mhs_penalty_box")),
         Box::new(audit_logger()),
-        Box::new(FastlyBackendProxy),
+        Box::new(FastlyBackendProxy::new(driver_base_url)),
     )
 }
