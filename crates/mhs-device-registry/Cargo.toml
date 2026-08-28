@@ -1,0 +1,10 @@
+[package]
+name = "mhs-device-registry"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Cached lookup of a device's declared safety limits by device id. No Fastly dependency — the cache/source backing is pluggable; the Fastly KV binding lives in mhs-gateway-fastly."
+
+[dependencies]
+mhs-safety-policy = { path = "../mhs-safety-policy" }
