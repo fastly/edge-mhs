@@ -116,6 +116,14 @@ note "tools/call set_temperature (missing required field -> -32602)"
 RES=$(rpc "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"set_temperature\",\"arguments\":{},$META}}")
 assert_eq "rejected before the handler runs" "$(echo "$RES" | jq -r '.error.code')" "-32602"
 
+# --- 5b. regression: undeclared arguments must not reach the backend -----
+# (security review finding: without additionalProperties:false, an extra key
+# is neither checked by mhs-safety-policy nor rejected by schema validation,
+# and is proxied to the driver unfiltered)
+note "tools/call set_temperature (undeclared extra field -> -32602, not proxied)"
+RES=$(rpc "{\"jsonrpc\":\"2.0\",\"id\":51,\"method\":\"tools/call\",\"params\":{\"name\":\"set_temperature\",\"arguments\":{\"celsius\":37,\"override_interlock\":true},$META}}")
+assert_eq "rejected before the handler runs" "$(echo "$RES" | jq -r '.error.code')" "-32602"
+
 # --- 6. unsupported protocol version (inherited, unmodified) -------------
 note "unsupported protocol version -> -32022"
 RES=$(rpc '{"jsonrpc":"2.0","id":6,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"1999-01-01","io.modelcontextprotocol/clientCapabilities":{}}}}')

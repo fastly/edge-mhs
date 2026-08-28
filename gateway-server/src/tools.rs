@@ -65,7 +65,8 @@ fn qpcr_set_temperature(registry_base_url: &str, driver_base_url: &str) -> Devic
             input_schema: json!({
                 "type": "object",
                 "properties": { "celsius": { "type": "number" } },
-                "required": ["celsius"]
+                "required": ["celsius"],
+                "additionalProperties": false
             }),
             required_scopes: vec!["mcp:mhs:qpcr-1:set_temperature".into()],
             backend_name: "mhs_driver".into(),
@@ -93,7 +94,8 @@ fn robot_arm_move_joint(registry_base_url: &str, driver_base_url: &str) -> Devic
                     "axis": { "type": "string" },
                     "angle_degrees": { "type": "number" }
                 },
-                "required": ["axis", "angle_degrees"]
+                "required": ["axis", "angle_degrees"],
+                "additionalProperties": false
             }),
             required_scopes: vec!["mcp:mhs:robot-arm-2:move_joint".into()],
             backend_name: "mhs_driver".into(),
