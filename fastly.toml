@@ -1,11 +1,11 @@
-# Fastly Compute manifest for the MHS edge gateway.
+# Fastly Compute manifest for edge-mhs-interlock.
 #
 # mcp-core and mcp-fastly are reused, unmodified, from fastly/edge-mcp
 # (Apache-2.0). The MHS-specific crates (mhs-safety-policy,
 # mhs-device-registry, mhs-gateway-fastly) plus gateway-server are new.
 manifest_version = 3
-name = "mhs-edge-gateway"
-description = "Edge security gateway for Model Hardware Standard (MHS) device control over MCP"
+name = "edge-mhs-interlock"
+description = "Edge security gateway for AI agents operating physical hardware over MCP — safety limits, quotas, and audit logging for Anthropic's Model Hardware Standard, on Fastly Compute."
 language = "rust"
 authors = ["austin@fastly.com"]
 
