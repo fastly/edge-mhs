@@ -1,0 +1,20 @@
+[package]
+name = "mhs-gateway-fastly"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Fastly Compute bindings for the MHS edge gateway: ERL-backed rate limiting, real-time-log audit events, the MHS backend proxy, and the KV-backed device registry."
+
+[dependencies]
+mhs-safety-policy = { path = "../mhs-safety-policy" }
+mhs-device-registry = { path = "../mhs-device-registry" }
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+
+# Gated the same way mcp-fastly gates its fastly dependency: only code behind
+# #[cfg(target_arch = "wasm32")] touches it, so the decision/formatting logic
+# stays host-testable via `cargo test`.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+fastly = "0.13"

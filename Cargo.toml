@@ -5,8 +5,8 @@ members = [
     "crates/mcp-fastly",
     "crates/mhs-safety-policy",
     "crates/mhs-device-registry",
+    "crates/mhs-gateway-fastly",
     # Added incrementally as each crate is scaffolded (TDD build order):
-    # "crates/mhs-gateway-fastly",
     # "gateway-server",
 ]
 
