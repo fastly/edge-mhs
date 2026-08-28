@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/mcp-core",
+    "crates/mcp-fastly",
+    "crates/mhs-safety-policy",
+    "crates/mhs-device-registry",
+    "crates/mhs-gateway-fastly",
+    "gateway-server",
+]
+
+[workspace.package]
+edition = "2021"
+license = "Apache-2.0"
+rust-version = "1.88"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+insta = { version = "1", features = ["json"] }
