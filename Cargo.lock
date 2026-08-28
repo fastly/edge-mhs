@@ -522,6 +522,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "gateway-server"
+version = "0.1.0"
+dependencies = [
+ "fastly",
+ "mcp-core",
+ "mcp-fastly",
+ "mhs-device-registry",
+ "mhs-gateway-fastly",
+ "mhs-safety-policy",
+ "serde_json",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"

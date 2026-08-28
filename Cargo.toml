@@ -6,8 +6,7 @@ members = [
     "crates/mhs-safety-policy",
     "crates/mhs-device-registry",
     "crates/mhs-gateway-fastly",
-    # Added incrementally as each crate is scaffolded (TDD build order):
-    # "gateway-server",
+    "gateway-server",
 ]
 
 [workspace.package]

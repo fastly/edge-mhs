@@ -1,0 +1,18 @@
+[package]
+name = "gateway-server"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "MHS edge security gateway: a stateless MCP server on Fastly Compute that authenticates, authorizes, safety-checks, quotas, and proxies tools/call to an MHS driver backend."
+
+[dependencies]
+mcp-core = { path = "../crates/mcp-core" }
+mhs-safety-policy = { path = "../crates/mhs-safety-policy" }
+mhs-device-registry = { path = "../crates/mhs-device-registry" }
+mhs-gateway-fastly = { path = "../crates/mhs-gateway-fastly" }
+serde_json.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+fastly = "0.13"
+mcp-fastly = { path = "../crates/mcp-fastly" }
