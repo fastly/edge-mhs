@@ -26,9 +26,19 @@ pub fn hash_principal(issuer: &str, subject: &str) -> String {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuditDecision {
+    /// Recorded before the proxy call, once safety and quota checks have
+    /// passed — a write-ahead record that the command is about to reach the
+    /// driver, independent of what the driver's response turns out to be.
+    Dispatched,
     Allowed,
     DeniedSafety { field: String },
     DeniedQuota,
+    /// The driver responded, but not with 2xx — distinct from [`ProxyError`](AuditDecision::ProxyError):
+    /// the driver was reachable and answered, it just rejected the command.
+    DeviceRejected { status: u16 },
+    /// No response was obtained at all (send failure, connection reset,
+    /// timeout) — whether the driver received and acted on the command
+    /// before the failure is unknown.
     ProxyError,
 }
 
@@ -46,12 +56,23 @@ pub fn format_line(event: &AuditEvent) -> String {
     serde_json::to_string(event).unwrap_or_else(|_| "{}".to_string())
 }
 
-/// Emits one audit event. Implementations must not fail the request if
-/// logging fails — an audit-pipeline outage should not become a hardware
-/// availability outage (best-effort, matching edge-mcp's own posture on
-/// non-critical side channels).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditError(pub String);
+
+impl std::fmt::Display for AuditError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "audit logging error: {}", self.0)
+    }
+}
+
+/// Emits one audit event, reporting whether the write actually succeeded.
+/// Most callers treat a failure as best-effort (an audit-pipeline outage on
+/// a deny path or a post-hoc outcome record should not itself become a
+/// hardware availability outage) — but the pre-dispatch `Dispatched` event is
+/// the one exception: if the caller can't prove the intent to actuate was
+/// logged, it must not proceed to actuate. See `DeviceToolHandler::call`.
 pub trait AuditLogger {
-    fn record(&self, event: &AuditEvent);
+    fn record(&self, event: &AuditEvent) -> Result<(), AuditError>;
 }
 
 /// The real Fastly-backed logger: a named real-time log endpoint (see the
@@ -71,12 +92,12 @@ impl FastlyLogAuditLogger {
 
 #[cfg(target_arch = "wasm32")]
 impl AuditLogger for FastlyLogAuditLogger {
-    fn record(&self, event: &AuditEvent) {
+    fn record(&self, event: &AuditEvent) -> Result<(), AuditError> {
         use std::io::Write;
         // Endpoint::write emits one log line per call; clone for an owned,
         // independently writable handle (cheap — just the host handle + name).
         let mut endpoint = self.endpoint.clone();
-        let _ = writeln!(endpoint, "{}", format_line(event));
+        writeln!(endpoint, "{}", format_line(event)).map_err(|e| AuditError(e.to_string()))
     }
 }
 
@@ -150,11 +171,13 @@ mod tests {
             tool: "t".into(),
             decision: d,
         };
+        let dispatched = format_line(&base(AuditDecision::Dispatched));
         let allowed = format_line(&base(AuditDecision::Allowed));
         let quota = format_line(&base(AuditDecision::DeniedQuota));
         let proxy_error = format_line(&base(AuditDecision::ProxyError));
+        let device_rejected = format_line(&base(AuditDecision::DeviceRejected { status: 500 }));
         let safety = format_line(&base(AuditDecision::DeniedSafety { field: "celsius".into() }));
-        let all = [&allowed, &quota, &proxy_error, &safety];
+        let all = [&dispatched, &allowed, &quota, &proxy_error, &device_rejected, &safety];
         for (i, a) in all.iter().enumerate() {
             for (j, b) in all.iter().enumerate() {
                 if i != j {

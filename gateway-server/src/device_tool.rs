@@ -118,7 +118,7 @@ impl ToolHandler for DeviceToolHandler {
             })?;
 
         if let PolicyDecision::Deny(violation) = evaluate(&limits, arguments) {
-            self.audit.record(&audit_event(AuditDecision::DeniedSafety { field: violation.field.clone() }));
+            let _ = self.audit.record(&audit_event(AuditDecision::DeniedSafety { field: violation.field.clone() }));
             return Ok(ToolOutcome::Complete(CallResult::tool_error(format!(
                 "safety policy violation on field '{}': {}",
                 violation.field, violation.reason
@@ -140,9 +140,20 @@ impl ToolHandler for DeviceToolHandler {
             )
             .map_err(|e| RpcError::internal(format!("rate limiter error: {e}")))?;
         if !allowed {
-            self.audit.record(&audit_event(AuditDecision::DeniedQuota));
+            let _ = self.audit.record(&audit_event(AuditDecision::DeniedQuota));
             return Ok(ToolOutcome::Complete(CallResult::tool_error(
                 "rate limit exceeded for this device/tool",
+            )));
+        }
+
+        // Write-ahead: record intent to actuate *before* the side effect. If
+        // we can't prove this was logged, we must not proceed to dispatch —
+        // the audit trail is the only record a physical command was ever
+        // attempted, and it must not be downstream of the attempt's own
+        // success (unlike the outcome events below, which are best-effort).
+        if let Err(e) = self.audit.record(&audit_event(AuditDecision::Dispatched)) {
+            return Err(RpcError::internal(format!(
+                "audit logging failed, refusing to dispatch: {e}"
             )));
         }
 
@@ -155,19 +166,19 @@ impl ToolHandler for DeviceToolHandler {
         );
         match self.proxy.forward(&request) {
             Ok(resp) if (200..300).contains(&resp.status) => {
-                self.audit.record(&audit_event(AuditDecision::Allowed));
+                let _ = self.audit.record(&audit_event(AuditDecision::Allowed));
                 Ok(ToolOutcome::Complete(CallResult::text(String::from_utf8_lossy(&resp.body).into_owned())))
             }
             Ok(resp) => {
                 eprintln!("mhs backend returned status {} [{correlation_id}]", resp.status);
-                self.audit.record(&audit_event(AuditDecision::ProxyError));
+                let _ = self.audit.record(&audit_event(AuditDecision::DeviceRejected { status: resp.status }));
                 Ok(ToolOutcome::Complete(CallResult::tool_error(format!(
                     "device did not accept the command (correlation id: {correlation_id})"
                 ))))
             }
             Err(e) => {
                 eprintln!("mhs backend proxy failed: {e} [{correlation_id}]");
-                self.audit.record(&audit_event(AuditDecision::ProxyError));
+                let _ = self.audit.record(&audit_event(AuditDecision::ProxyError));
                 Ok(ToolOutcome::Complete(CallResult::tool_error(format!(
                     "device request failed (correlation id: {correlation_id})"
                 ))))
@@ -234,10 +245,15 @@ mod tests {
     #[derive(Default)]
     struct FakeAudit {
         events: RefCell<Vec<AuditEvent>>,
+        fail: bool,
     }
     impl AuditLogger for FakeAudit {
-        fn record(&self, event: &AuditEvent) {
+        fn record(&self, event: &AuditEvent) -> Result<(), mhs_gateway_fastly::audit::AuditError> {
+            if self.fail {
+                return Err(mhs_gateway_fastly::audit::AuditError("simulated audit outage".into()));
+            }
             self.events.borrow_mut().push(event.clone());
+            Ok(())
         }
     }
 
@@ -299,7 +315,7 @@ mod tests {
     }
     struct RcAudit(std::rc::Rc<FakeAudit>);
     impl AuditLogger for RcAudit {
-        fn record(&self, event: &AuditEvent) {
+        fn record(&self, event: &AuditEvent) -> Result<(), mhs_gateway_fastly::audit::AuditError> {
             self.0.record(event)
         }
     }
@@ -329,8 +345,9 @@ mod tests {
         }
         assert_eq!(proxy.calls.get(), 1, "proxy must be called on the happy path");
         assert_eq!(rate.calls.get(), 1);
-        assert_eq!(audit.events.borrow().len(), 1);
-        assert!(matches!(audit.events.borrow()[0].decision, AuditDecision::Allowed));
+        assert_eq!(audit.events.borrow().len(), 2, "expected a pre-dispatch record plus the outcome");
+        assert!(matches!(audit.events.borrow()[0].decision, AuditDecision::Dispatched));
+        assert!(matches!(audit.events.borrow()[1].decision, AuditDecision::Allowed));
     }
 
     #[test]
@@ -390,7 +407,52 @@ mod tests {
             }
             _ => panic!("expected Complete"),
         }
-        assert!(matches!(audit.events.borrow()[0].decision, AuditDecision::ProxyError));
+        assert_eq!(audit.events.borrow().len(), 2);
+        assert!(matches!(audit.events.borrow()[0].decision, AuditDecision::Dispatched));
+        assert!(matches!(audit.events.borrow()[1].decision, AuditDecision::ProxyError));
+    }
+
+    #[test]
+    fn non_2xx_response_is_recorded_as_device_rejected_not_proxy_error() {
+        // A driver that answers (even to reject the command) is a different
+        // situation from one that couldn't be reached at all -- the audit
+        // trail should be able to tell them apart.
+        let (h, audit, _proxy, _rate) = handler(
+            Ok(Some(celsius_limits())),
+            Ok(true),
+            Ok(ProxyResponse { status: 500, body: b"nope".to_vec() }),
+        );
+        let ctx = ctx_with(Some(a_principal()));
+        let _ = h.call(&ctx, &json!({ "celsius": 37.0 })).unwrap();
+        let events = audit.events.borrow();
+        assert_eq!(events.len(), 2);
+        match events[1].decision {
+            AuditDecision::DeviceRejected { status } => assert_eq!(status, 500),
+            ref other => panic!("expected DeviceRejected, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn audit_write_failure_before_dispatch_prevents_the_proxy_call_and_fails_closed() {
+        // Write-ahead: if we can't prove the pre-dispatch intent was logged,
+        // we must not proceed to actuate.
+        let proxy = std::rc::Rc::new(FakeProxy { result: ok_response("ok"), calls: Cell::new(0) });
+        let rate = std::rc::Rc::new(FakeRateLimiter { allow: Ok(true), calls: Cell::new(0) });
+        let audit = std::rc::Rc::new(FakeAudit { events: RefCell::new(Vec::new()), fail: true });
+        let h = DeviceToolHandler::new(
+            config(),
+            Box::new(FakeLimits { result: Ok(Some(celsius_limits())) }),
+            Box::new(RcRateLimiter(rate.clone())),
+            Box::new(RcAudit(audit.clone())),
+            Box::new(RcProxy(proxy.clone())),
+        );
+        let ctx = ctx_with(Some(a_principal()));
+        let err = match h.call(&ctx, &json!({ "celsius": 37.0 })) {
+            Err(e) => e,
+            Ok(_) => panic!("expected an internal RpcError when audit logging fails before dispatch"),
+        };
+        assert_eq!(err.code, mcp_core::jsonrpc::ErrorCode::INTERNAL_ERROR);
+        assert_eq!(proxy.calls.get(), 0, "must not dispatch to hardware without a provable audit record");
     }
 
     #[test]
