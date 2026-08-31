@@ -8,8 +8,8 @@
 #
 #   viceroy --addr 127.0.0.1:7686 -C fastly.demo.toml bin/main.wasm
 manifest_version = 3
-name = "edge-mhs-interlock-demo"
-description = "Local, unauthenticated demo of edge-mhs-interlock (do not deploy)"
+name = "edge-mhs-demo"
+description = "Local, unauthenticated demo of edge-mhs (do not deploy)"
 language = "rust"
 authors = ["austin@fastly.com"]
 

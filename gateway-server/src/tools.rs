@@ -23,7 +23,7 @@ use crate::device_tool::{DeviceToolConfig, DeviceToolHandler};
 const LIMITS_MAX_AGE_SECS: u64 = 3600;
 
 pub fn register_handlers(router: &mut Router) {
-    router.with_server_info(json!({ "name": "edge-mhs-interlock", "version": "0.1.0" }));
+    router.with_server_info(json!({ "name": "edge-mhs", "version": "0.1.0" }));
     // Shares the "verifier" Config Store mcp-fastly's VerifierConfig already
     // reads from, rather than provisioning a second store for two strings.
     let config = ConfigStore::try_open("verifier").expect("verifier Config Store must exist");

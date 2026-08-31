@@ -1,4 +1,4 @@
-# edge-mhs-interlock
+# edge-mhs
 
 An **edge security gateway on [Fastly Compute](https://www.fastly.com/products/compute)
 for [Model Hardware Standard](https://www.anthropic.com/news/model-hardware-standard-research-preview)
@@ -30,7 +30,7 @@ logging as gaps a production deployment must close (CMCP-003, CMCP-007) —
 those are exactly the two production controls this gateway adds, on top of the
 MHS-specific safety layer.
 
-See [`docs/superpowers/specs/2026-08-27-edge-mhs-interlock-design.md`](docs/superpowers/specs/2026-08-27-edge-mhs-interlock-design.md)
+See [`docs/superpowers/specs/2026-08-27-edge-mhs-design.md`](docs/superpowers/specs/2026-08-27-edge-mhs-design.md)
 for the full design writeup (kept local, not committed — see `.gitignore`).
 
 ## Status
