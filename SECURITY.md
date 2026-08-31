@@ -5,6 +5,23 @@ This is a **reference implementation**, forked from
 by default, but it is not a managed product. Before any real deployment, read
 this document and complete the deployment-layer controls below.
 
+## Reporting a vulnerability
+
+- **Fastly employees**: for exposed credentials, leaked data, or any other
+  active security incident, use `#team-infosec`.
+- **External reporters**: there is currently no reporting channel configured
+  for this repository specifically. GitHub's private vulnerability reporting
+  is not enabled here (this repo doesn't have GitHub Advanced Security
+  available on a private repo), and no dedicated security-contact address is
+  documented for this project. Before this repository is made public, someone
+  with admin access needs to either enable GitHub's private vulnerability
+  reporting on it or add Fastly's actual designated disclosure contact here —
+  this section is a placeholder until one of those happens, not a functioning
+  channel.
+
+There's also no supported-versions statement or response-time commitment yet
+— there has only ever been one version of this reference implementation.
+
 ## What this codebase enforces
 
 Everything edge-mcp's own `SECURITY.md` lists is inherited unmodified
@@ -102,6 +119,14 @@ you provision, not on code in this repo:
   cache-purge propagation, ERL enforcement) on a live service — local Viceroy
   cannot reproduce all of these, and this repo found at least one concrete
   gap (rate limiting) during its own smoke testing.
+- **Anonymous demo mode provides no per-caller isolation.** With no
+  principal, every request collapses to the same quota bucket
+  (`principal_id = "anonymous"`) and the same MRTR continuation identity —
+  one anonymous caller can exhaust another's quota or resume another's
+  in-flight continuation. This requires *both* `auth_required = "false"`
+  **and** `allow_anonymous_demo = "true"` (see `fastly.demo.toml`,
+  banner-marked do-not-deploy), so it's not reachable by accident — but don't
+  point `fastly.demo.toml` at a shared or network-reachable endpoint.
 
 ## Trust boundary reminder for consumers
 
