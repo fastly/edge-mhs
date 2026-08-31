@@ -19,26 +19,35 @@ pub struct ProxyRequest {
 /// Build the request that forwards one validated `tools/call` to the MHS
 /// driver backend. `arguments` travels unchanged — everything upstream
 /// (schema validation, safety-policy, quota) has already run by this point.
+///
+/// Returns `Err` on a serialization failure rather than falling back to an
+/// empty body — in practice `body` is assembled entirely from
+/// already-parsed `serde_json::Value`s (which can't hold a non-string map
+/// key or a NaN), so this is unreachable today, but an empty POST body sent
+/// to a physical device driver is a worse failure mode than a returned
+/// error, so the fallback isn't a silent default.
 pub fn build_request(
     backend_name: &str,
     device_id: &str,
     tool: &str,
     arguments: &Value,
     correlation_id: &str,
-) -> ProxyRequest {
+) -> Result<ProxyRequest, ProxyError> {
     let body = json!({
         "device_id": device_id,
         "tool": tool,
         "arguments": arguments,
     });
-    ProxyRequest {
+    let bytes = serde_json::to_vec(&body)
+        .map_err(|e| ProxyError(format!("failed to serialize proxy request body: {e}")))?;
+    Ok(ProxyRequest {
         backend: backend_name.to_string(),
-        body: serde_json::to_vec(&body).unwrap_or_default(),
+        body: bytes,
         headers: vec![
             ("Content-Type".to_string(), "application/json".to_string()),
             ("X-Correlation-Id".to_string(), correlation_id.to_string()),
         ],
-    }
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -128,14 +137,14 @@ mod tests {
 
     #[test]
     fn request_targets_the_configured_backend() {
-        let req = build_request("mhs_driver", "qpcr-1", "set_temperature", &json!({"celsius": 37}), "corr-1");
+        let req = build_request("mhs_driver", "qpcr-1", "set_temperature", &json!({"celsius": 37}), "corr-1").unwrap();
         assert_eq!(req.backend, "mhs_driver");
     }
 
     #[test]
     fn body_carries_device_tool_and_arguments_unchanged() {
         let args = json!({"celsius": 37, "nested": {"a": [1, 2, 3]}});
-        let req = build_request("mhs_driver", "qpcr-1", "set_temperature", &args, "corr-1");
+        let req = build_request("mhs_driver", "qpcr-1", "set_temperature", &args, "corr-1").unwrap();
         let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap();
         assert_eq!(body["device_id"], "qpcr-1");
         assert_eq!(body["tool"], "set_temperature");
@@ -144,7 +153,7 @@ mod tests {
 
     #[test]
     fn correlation_id_header_is_present() {
-        let req = build_request("mhs_driver", "qpcr-1", "set_temperature", &json!({}), "corr-42");
+        let req = build_request("mhs_driver", "qpcr-1", "set_temperature", &json!({}), "corr-42").unwrap();
         assert!(req
             .headers
             .iter()
@@ -153,7 +162,7 @@ mod tests {
 
     #[test]
     fn content_type_header_is_json() {
-        let req = build_request("mhs_driver", "qpcr-1", "set_temperature", &json!({}), "corr-1");
+        let req = build_request("mhs_driver", "qpcr-1", "set_temperature", &json!({}), "corr-1").unwrap();
         assert!(req
             .headers
             .iter()

@@ -179,7 +179,8 @@ impl ToolHandler for DeviceToolHandler {
             &self.config.tool_name,
             arguments,
             &correlation_id,
-        );
+        )
+        .map_err(|e| RpcError::internal(format!("failed to build proxy request: {e}")))?;
         match self.proxy.forward(&request) {
             Ok(resp) if (200..300).contains(&resp.status) => {
                 // Parse before trusting: the raw bytes never reach the
