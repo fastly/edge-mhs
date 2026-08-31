@@ -35,6 +35,19 @@ pub fn entry_key(key: &QuotaKey) -> String {
     )
 }
 
+/// Build the entry key used to track *denied* (safety-violating) calls,
+/// separate from [`entry_key`]'s legitimate-call counter. A caller probing
+/// the safety boundary must not spend its normal quota budget doing so, but
+/// it must not be unbounded either — this gives it a distinct counter that
+/// can still be rate-limited and penalty-boxed on its own.
+///
+/// `deny|` can never collide with a real `entry_key()` output: every
+/// `entry_key()` output starts with a decimal length prefix, never the
+/// literal ASCII letter `d`.
+pub fn entry_key_for_denial(key: &QuotaKey) -> String {
+    format!("deny|{}", entry_key(key))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RateWindowKind {
     OneSec,
@@ -75,6 +88,20 @@ pub trait RateLimiter {
         window_secs: u32,
         penalty_ttl_secs: u64,
     ) -> Result<bool, RateLimitError>;
+
+    /// Track a safety-policy-denied call against a counter separate from
+    /// [`allow`](RateLimiter::allow)'s legitimate-call budget — so probing
+    /// the safety boundary doesn't spend a caller's normal quota, but still
+    /// accumulates toward its own penalty. The outcome doesn't change the
+    /// caller's response (the call is already being denied for safety
+    /// reasons); this exists for the side effect.
+    fn track_denial(
+        &self,
+        key: &QuotaKey,
+        max_per_window: u32,
+        window_secs: u32,
+        penalty_ttl_secs: u64,
+    ) -> Result<(), RateLimitError>;
 }
 
 /// The real Fastly-backed limiter: a named rate counter + penalty box pair,
@@ -96,10 +123,10 @@ impl FastlyErlRateLimiter {
 }
 
 #[cfg(target_arch = "wasm32")]
-impl RateLimiter for FastlyErlRateLimiter {
-    fn allow(
+impl FastlyErlRateLimiter {
+    fn check(
         &self,
-        key: &QuotaKey,
+        entry: &str,
         max_per_window: u32,
         window_secs: u32,
         penalty_ttl_secs: u64,
@@ -114,7 +141,7 @@ impl RateLimiter for FastlyErlRateLimiter {
         let blocked = self
             .erl
             .check_rate(
-                &entry_key(key),
+                entry,
                 1,
                 fastly_window,
                 max_per_window,
@@ -122,6 +149,30 @@ impl RateLimiter for FastlyErlRateLimiter {
             )
             .map_err(|e| RateLimitError(format!("{e:?}")))?;
         Ok(!blocked)
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl RateLimiter for FastlyErlRateLimiter {
+    fn allow(
+        &self,
+        key: &QuotaKey,
+        max_per_window: u32,
+        window_secs: u32,
+        penalty_ttl_secs: u64,
+    ) -> Result<bool, RateLimitError> {
+        self.check(&entry_key(key), max_per_window, window_secs, penalty_ttl_secs)
+    }
+
+    fn track_denial(
+        &self,
+        key: &QuotaKey,
+        max_per_window: u32,
+        window_secs: u32,
+        penalty_ttl_secs: u64,
+    ) -> Result<(), RateLimitError> {
+        self.check(&entry_key_for_denial(key), max_per_window, window_secs, penalty_ttl_secs)
+            .map(|_| ())
     }
 }
 
@@ -185,5 +236,30 @@ mod tests {
     fn invalid_window_is_rejected() {
         assert!(window_from_secs(30).is_err());
         assert!(window_from_secs(0).is_err());
+    }
+
+    #[test]
+    fn denial_entry_key_differs_from_the_legitimate_entry_key() {
+        // A safety-violation probe must not spend the caller's legitimate
+        // quota, but it also must not go completely unbounded -- it needs
+        // its own counter, distinct from the normal-call one.
+        let k = key("user-1", "qpcr-1", "set_temperature");
+        assert_ne!(entry_key(&k), entry_key_for_denial(&k));
+    }
+
+    #[test]
+    fn denial_entry_key_cannot_collide_with_a_legitimate_entry_key() {
+        // entry_key() output always starts with a digit (a length prefix);
+        // the denial variant's prefix must not be able to coincide with any
+        // real entry_key() output for some other key.
+        let k = key("user-1", "qpcr-1", "set_temperature");
+        assert!(!entry_key_for_denial(&k).as_bytes()[0].is_ascii_digit());
+    }
+
+    #[test]
+    fn denial_entry_key_is_still_collision_safe_across_boundary_shifts() {
+        let a = key("a", "b|c", "d");
+        let b = key("a|b", "c", "d");
+        assert_ne!(entry_key_for_denial(&a), entry_key_for_denial(&b));
     }
 }

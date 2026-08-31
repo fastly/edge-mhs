@@ -117,7 +117,23 @@ impl ToolHandler for DeviceToolHandler {
                 ))
             })?;
 
+        let quota_key = QuotaKey {
+            principal_id: principal_key,
+            device_id: self.config.device_id.clone(),
+            tool: self.config.tool_name.clone(),
+        };
+
         if let PolicyDecision::Deny(violation) = evaluate(&limits, arguments) {
+            // Tracked against a separate counter from `allow` below: probing
+            // the safety boundary must not spend the caller's legitimate
+            // quota, but repeated probing must still accumulate toward its
+            // own penalty rather than being free.
+            let _ = self.rate_limiter.track_denial(
+                &quota_key,
+                self.config.max_calls_per_window,
+                self.config.window_secs,
+                self.config.penalty_ttl_secs,
+            );
             let _ = self.audit.record(&audit_event(AuditDecision::DeniedSafety { field: violation.field.clone() }));
             return Ok(ToolOutcome::Complete(CallResult::tool_error(format!(
                 "safety policy violation on field '{}': {}",
@@ -125,11 +141,6 @@ impl ToolHandler for DeviceToolHandler {
             ))));
         }
 
-        let quota_key = QuotaKey {
-            principal_id: principal_key,
-            device_id: self.config.device_id.clone(),
-            tool: self.config.tool_name.clone(),
-        };
         let allowed = self
             .rate_limiter
             .allow(
@@ -234,11 +245,16 @@ mod tests {
     struct FakeRateLimiter {
         allow: Result<bool, RateLimitError>,
         calls: Cell<u32>,
+        denial_tracks: Cell<u32>,
     }
     impl RateLimiter for FakeRateLimiter {
         fn allow(&self, _key: &QuotaKey, _max: u32, _window: u32, _ttl: u64) -> Result<bool, RateLimitError> {
             self.calls.set(self.calls.get() + 1);
             self.allow.clone()
+        }
+        fn track_denial(&self, _key: &QuotaKey, _max: u32, _window: u32, _ttl: u64) -> Result<(), RateLimitError> {
+            self.denial_tracks.set(self.denial_tracks.get() + 1);
+            Ok(())
         }
     }
 
@@ -294,7 +310,7 @@ mod tests {
     ) -> (DeviceToolHandler, std::rc::Rc<FakeAudit>, std::rc::Rc<FakeProxy>, std::rc::Rc<FakeRateLimiter>) {
         let audit = std::rc::Rc::new(FakeAudit::default());
         let proxy = std::rc::Rc::new(FakeProxy { result: proxy_result, calls: Cell::new(0) });
-        let rate = std::rc::Rc::new(FakeRateLimiter { allow: rate_allow, calls: Cell::new(0) });
+        let rate = std::rc::Rc::new(FakeRateLimiter { allow: rate_allow, calls: Cell::new(0), denial_tracks: Cell::new(0) });
         let h = DeviceToolHandler::new(
             config(),
             Box::new(FakeLimits { result: limits }),
@@ -311,6 +327,9 @@ mod tests {
     impl RateLimiter for RcRateLimiter {
         fn allow(&self, key: &QuotaKey, max: u32, window: u32, ttl: u64) -> Result<bool, RateLimitError> {
             self.0.allow(key, max, window, ttl)
+        }
+        fn track_denial(&self, key: &QuotaKey, max: u32, window: u32, ttl: u64) -> Result<(), RateLimitError> {
+            self.0.track_denial(key, max, window, ttl)
         }
     }
     struct RcAudit(std::rc::Rc<FakeAudit>);
@@ -364,7 +383,8 @@ mod tests {
             _ => panic!("expected Complete"),
         }
         assert_eq!(proxy.calls.get(), 0, "a safety-denied call must never reach the backend");
-        assert_eq!(rate.calls.get(), 0, "safety check runs before the quota check");
+        assert_eq!(rate.calls.get(), 0, "the legitimate quota is not spent by a safety denial");
+        assert_eq!(rate.denial_tracks.get(), 1, "but the denial must still be tracked against its own counter");
         assert_eq!(audit.events.borrow().len(), 1);
         assert!(matches!(
             audit.events.borrow()[0].decision,
@@ -437,7 +457,7 @@ mod tests {
         // Write-ahead: if we can't prove the pre-dispatch intent was logged,
         // we must not proceed to actuate.
         let proxy = std::rc::Rc::new(FakeProxy { result: ok_response("ok"), calls: Cell::new(0) });
-        let rate = std::rc::Rc::new(FakeRateLimiter { allow: Ok(true), calls: Cell::new(0) });
+        let rate = std::rc::Rc::new(FakeRateLimiter { allow: Ok(true), calls: Cell::new(0), denial_tracks: Cell::new(0) });
         let audit = std::rc::Rc::new(FakeAudit { events: RefCell::new(Vec::new()), fail: true });
         let h = DeviceToolHandler::new(
             config(),
