@@ -49,7 +49,12 @@ impl<C: LimitsCache, S: LimitsSource> DeviceRegistry<C, S> {
     /// host-supplied — this crate has no ambient clock).
     pub fn limits_for(&self, device_id: &str, now: u64) -> Result<Option<DeviceLimits>, RegistryError> {
         if let Some((limits, fetched_at)) = self.cache.read(device_id) {
-            if now < fetched_at + self.max_age_secs {
+            // checked_add, not saturating_add: if the freshness deadline
+            // would overflow, treat the entry as stale (refetch) rather than
+            // as "fresh forever" -- the safe failure direction for a cache
+            // that gates a physical-safety check is toward a fresh fetch,
+            // not toward indefinitely trusting a corrupted timestamp.
+            if fetched_at.checked_add(self.max_age_secs).is_some_and(|expiry| now < expiry) {
                 return Ok(Some(limits));
             }
         }
@@ -135,6 +140,21 @@ mod tests {
         let result = registry.limits_for("qpcr-1", 1500).unwrap(); // within max_age
         assert_eq!(result, Some(limits_with("celsius", 4.0, 100.0)));
         assert_eq!(registry.source.calls.get(), 0, "a fresh cache hit must not call the source");
+    }
+
+    #[test]
+    fn freshness_check_does_not_overflow_on_a_near_max_timestamp() {
+        // fetched_at is only ever written by this code from a host-supplied
+        // clock, but a KV entry could in principle carry a corrupted or
+        // adversarial value close to u64::MAX -- the freshness comparison
+        // must not panic (debug builds) or wrap into "still fresh" (release).
+        let source = FakeSource::default();
+        let cache = FakeCache::default();
+        cache.write("qpcr-1", &limits_with("celsius", 4.0, 100.0), u64::MAX - 5);
+        let registry = DeviceRegistry::new(cache, source, 3600);
+
+        let result = registry.limits_for("qpcr-1", u64::MAX - 1);
+        assert_eq!(result, Ok(None), "must refetch (source has no data) rather than panic or wrap");
     }
 
     #[test]

@@ -19,8 +19,13 @@ use serde_json::json;
 use crate::device_tool::{DeviceToolConfig, DeviceToolHandler};
 
 /// Device-limits cache freshness: re-check the metadata backend at most this
-/// often per device.
-const LIMITS_MAX_AGE_SECS: u64 = 3600;
+/// often per device. Kept short (rather than the hour+ often used for
+/// low-stakes config caching) because this cache gates a physical-safety
+/// check — a tightened limit (e.g. after a hardware fault) should take
+/// effect at the edge quickly. There is currently no purge/invalidation path
+/// for `device_limits_cache` (see SECURITY.md); this TTL is the only bound
+/// on how stale an active safety limit can be.
+const LIMITS_MAX_AGE_SECS: u64 = 300;
 
 pub fn register_handlers(router: &mut Router) {
     router.with_server_info(json!({ "name": "edge-mhs", "version": "0.1.0" }));

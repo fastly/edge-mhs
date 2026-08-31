@@ -90,6 +90,14 @@ you provision, not on code in this repo:
   request.
 - Provide an emergency JWKS purge/refresh procedure and document key rotation
   (both the AEAD signer key ring and issuer JWKS).
+- **`device_limits_cache` has no purge path today.** A device's safety limits
+  are cached for `LIMITS_MAX_AGE_SECS` (currently 300s) with no way to force
+  an immediate refresh — if a limit is tightened after a hardware fault, the
+  old, wider limit remains authoritative at any POP holding a live cache
+  entry for up to that TTL. Until a purge/invalidation path exists, treat the
+  TTL as the actual upper bound on "how stale can an active safety limit be"
+  and size it accordingly; do not raise it without adding a purge lever
+  first.
 - Validate real Fastly behavior (CPU/memory limits, KV consistency,
   cache-purge propagation, ERL enforcement) on a live service — local Viceroy
   cannot reproduce all of these, and this repo found at least one concrete
