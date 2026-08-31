@@ -73,7 +73,7 @@ mod tests {
     fn limits_with(field: &str, min: f64, max: f64) -> DeviceLimits {
         let mut fields = std::collections::BTreeMap::new();
         fields.insert(field.to_string(), Limit::Range { min, max });
-        DeviceLimits { fields }
+        DeviceLimits { fields, unrestricted: false }
     }
 
     #[derive(Default)]

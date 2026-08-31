@@ -22,10 +22,24 @@ pub enum Limit {
 
 /// A device's declared safety limits, keyed by tool-argument field name.
 /// Sourced from MHS device-discovery metadata (see `mhs-device-registry`).
+///
+/// `fields` is required (no `#[serde(default)]`) and unknown top-level keys
+/// are rejected: a device-metadata document that doesn't match this shape
+/// exactly — e.g. wire-shape drift, nesting limits under a different key —
+/// must fail to parse rather than silently deserialize into an empty,
+/// unintentionally permissive ruleset. An empty `fields` map is itself denied
+/// by [`evaluate`] unless `unrestricted` explicitly opts in, so "the backend
+/// forgot to populate real limits" and "this device genuinely has none" can
+/// never be confused with each other.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DeviceLimits {
-    #[serde(default)]
     pub fields: BTreeMap<String, Limit>,
+    /// Explicit operator acknowledgement that this device declares no
+    /// bounds. Absent this, an empty `fields` map is treated as a
+    /// configuration error, not permission.
+    #[serde(default)]
+    pub unrestricted: bool,
 }
 
 /// Why a `tools/call` was denied by the safety-policy check.
@@ -48,6 +62,12 @@ pub enum PolicyDecision {
 /// expected shape (e.g. a string against a `Range` limit) is denied rather
 /// than skipped: fail closed on malformed input.
 pub fn evaluate(limits: &DeviceLimits, arguments: &Value) -> PolicyDecision {
+    if limits.fields.is_empty() && !limits.unrestricted {
+        return PolicyDecision::Deny(PolicyViolation {
+            field: "<no limits configured>".to_string(),
+            reason: "device declares no safety limits and is not marked unrestricted".to_string(),
+        });
+    }
     for (field, limit) in &limits.fields {
         let Some(value) = arguments.get(field) else {
             continue;
@@ -102,7 +122,7 @@ mod tests {
     fn range_limits(field: &str, min: f64, max: f64) -> DeviceLimits {
         let mut fields = std::collections::BTreeMap::new();
         fields.insert(field.to_string(), Limit::Range { min, max });
-        DeviceLimits { fields }
+        DeviceLimits { fields, unrestricted: false }
     }
 
     fn allowed_limits(field: &str, values: &[&str]) -> DeviceLimits {
@@ -111,14 +131,44 @@ mod tests {
             field.to_string(),
             Limit::Allowed { values: values.iter().map(|s| s.to_string()).collect() },
         );
-        DeviceLimits { fields }
+        DeviceLimits { fields, unrestricted: false }
     }
 
     #[test]
-    fn no_limits_defined_allows_anything() {
+    fn no_limits_defined_denies_by_default() {
+        // An empty ruleset must not mean "anything goes" — it can't be told
+        // apart from a device-metadata backend that failed to populate real
+        // limits (wire-shape drift, a bug, a truncated response). Genuinely
+        // unconstrained devices must say so explicitly via `unrestricted`.
         let limits = DeviceLimits::default();
         let decision = evaluate(&limits, &json!({ "celsius": 999 }));
+        match decision {
+            PolicyDecision::Deny(_) => {}
+            other => panic!("expected Deny for an empty, non-unrestricted ruleset, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unrestricted_device_allows_despite_empty_fields() {
+        let limits = DeviceLimits { fields: Default::default(), unrestricted: true };
+        let decision = evaluate(&limits, &json!({ "celsius": 999999 }));
         assert_eq!(decision, PolicyDecision::Allow);
+    }
+
+    #[test]
+    fn unknown_top_level_key_fails_to_deserialize() {
+        // Wire-shape drift (e.g. a metadata backend nesting limits under a
+        // different key) must fail to parse rather than silently produce an
+        // empty, denying-by-default-but-still-wrong ruleset.
+        let result: Result<DeviceLimits, _> =
+            serde_json::from_str(r#"{"limits": {"celsius": {"kind": "range", "min": 4.0, "max": 100.0}}}"#);
+        assert!(result.is_err(), "an unrecognized top-level key must not deserialize");
+    }
+
+    #[test]
+    fn fields_key_is_required() {
+        let result: Result<DeviceLimits, _> = serde_json::from_str("{}");
+        assert!(result.is_err(), "`fields` must be required, not defaulted to empty");
     }
 
     #[test]
@@ -200,7 +250,7 @@ mod tests {
             "axis".to_string(),
             Limit::Allowed { values: vec!["x".into(), "y".into(), "z".into()] },
         );
-        let limits = DeviceLimits { fields };
+        let limits = DeviceLimits { fields, unrestricted: false };
         let decision = evaluate(&limits, &json!({ "celsius": 999.0, "axis": "w" }));
         match decision {
             PolicyDecision::Deny(v) => assert_eq!(v.field, "axis"),

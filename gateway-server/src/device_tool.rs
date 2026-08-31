@@ -208,7 +208,7 @@ mod tests {
     fn celsius_limits() -> DeviceLimits {
         let mut fields = std::collections::BTreeMap::new();
         fields.insert("celsius".to_string(), Limit::Range { min: 4.0, max: 100.0 });
-        DeviceLimits { fields }
+        DeviceLimits { fields, unrestricted: false }
     }
 
     struct FakeLimits {
