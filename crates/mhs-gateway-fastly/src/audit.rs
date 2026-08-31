@@ -13,9 +13,13 @@ use sha2::{Digest, Sha256};
 /// (issuer, subject) pair could recompute it — but it keeps raw subjects out
 /// of the log stream and out of any downstream system that ingests it.
 pub fn hash_principal(issuer: &str, subject: &str) -> String {
+    // Length-prefixed (like rate_limit::entry_key) so a delimiter occurring
+    // inside `issuer` or `subject` can't shift the field boundary and hash
+    // two distinct (issuer, subject) pairs to the same digest.
     let mut hasher = Sha256::new();
+    hasher.update(issuer.len().to_le_bytes());
     hasher.update(issuer.as_bytes());
-    hasher.update(b"|");
+    hasher.update(subject.len().to_le_bytes());
     hasher.update(subject.as_bytes());
     let digest = hasher.finalize();
     // Truncated: this is a log correlation id, not a security token — the
@@ -105,6 +109,14 @@ impl AuditLogger for FastlyLogAuditLogger {
 mod tests {
     use super::*;
     use serde_json::Value;
+
+    #[test]
+    fn hash_principal_boundary_shift_does_not_collide() {
+        // Without a delimiter that survives a shift, ("a", "b|c") and
+        // ("a|b", "c") would both hash the same "a|b|c" byte sequence --
+        // the same bug class rate_limit::entry_key already guards against.
+        assert_ne!(hash_principal("a", "b|c"), hash_principal("a|b", "c"));
+    }
 
     #[test]
     fn hash_principal_is_deterministic() {
