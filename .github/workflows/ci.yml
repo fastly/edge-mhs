@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: cargo test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo test --workspace
+
+  clippy:
+    name: cargo clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup component add clippy
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  wasm-build:
+    name: wasm32-wasip1 build (gateway-server)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup target add wasm32-wasip1
+      - run: cargo build --release --target wasm32-wasip1 --package gateway-server
+      - run: rustup component add clippy --target wasm32-wasip1
+      - run: cargo clippy --release --target wasm32-wasip1 --package gateway-server -- -D warnings
+
+  osv-scanner:
+    name: dependency vulnerability scan
+    permissions:
+      contents: read
+      security-events: write
+    # osv-scanner's own recommended CI integration (see
+    # https://google.github.io/osv-scanner/github-action/). Pinned to @main
+    # per that documentation's own example -- consider pinning to a specific
+    # release tag or commit SHA for stricter supply-chain hygiene.
+    uses: "google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@main"
+    with:
+      scan-args: |-
+        --lockfile=./Cargo.lock
