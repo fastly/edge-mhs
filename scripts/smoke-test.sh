@@ -24,7 +24,11 @@ cd "$ROOT"
 ADDR="127.0.0.1:7686"
 URL="http://${ADDR}/"
 MOCK_PORT="8899"
-export SECRET_MRTR_AEAD_KEY_1="0123456789abcdef0123456789abcdef"
+# Ephemeral, generated fresh per run -- never a fixed literal committed to the
+# repo (this key seals real MRTR/Task tokens for the local Viceroy process,
+# even though it's a throwaway demo run).
+export SECRET_MRTR_AEAD_KEY_1="$(openssl rand -base64 32)"
+LOGDIR="$(mktemp -d)"
 
 PASS=0
 FAIL=0
@@ -34,6 +38,7 @@ MOCK_PID=""
 cleanup() {
   [ -n "$VICEROY_PID" ] && kill "$VICEROY_PID" 2>/dev/null
   [ -n "$MOCK_PID" ] && kill "$MOCK_PID" 2>/dev/null
+  rm -rf "$LOGDIR"
 }
 trap cleanup EXIT
 
@@ -66,14 +71,14 @@ printf '{}\n' > data/kv_device_limits.json
 
 # --- Start the mock MHS backend -----------------------------------------
 note "Starting mock MHS backend on ${MOCK_PORT}…"
-python3 scripts/mock_mhs_backend.py "$MOCK_PORT" >/tmp/mhs-mock-smoke.log 2>&1 &
+python3 scripts/mock_mhs_backend.py "$MOCK_PORT" >"$LOGDIR/mock.log" 2>&1 &
 MOCK_PID=$!
 sleep 0.3
-kill -0 "$MOCK_PID" 2>/dev/null || { echo "mock backend failed to start:"; cat /tmp/mhs-mock-smoke.log; exit 1; }
+kill -0 "$MOCK_PID" 2>/dev/null || { echo "mock backend failed to start:"; cat "$LOGDIR/mock.log"; exit 1; }
 
 # --- Start Viceroy -------------------------------------------------------
 note "Starting Viceroy on ${ADDR} (demo config, auth disabled)…"
-viceroy --addr "$ADDR" -C fastly.demo.toml bin/main.wasm >/tmp/mhs-gateway-viceroy.log 2>&1 &
+viceroy --addr "$ADDR" -C fastly.demo.toml bin/main.wasm >"$LOGDIR/viceroy.log" 2>&1 &
 VICEROY_PID=$!
 
 ready=0
@@ -81,10 +86,10 @@ for _ in $(seq 1 40); do
   if curl -s -o /dev/null "$URL" -X POST -H 'Content-Type: application/json' -d '{}' 2>/dev/null; then
     ready=1; break
   fi
-  kill -0 "$VICEROY_PID" 2>/dev/null || { echo "Viceroy exited early:"; tail -20 /tmp/mhs-gateway-viceroy.log; exit 1; }
+  kill -0 "$VICEROY_PID" 2>/dev/null || { echo "Viceroy exited early:"; tail -20 "$LOGDIR/viceroy.log"; exit 1; }
   sleep 0.25
 done
-[ "$ready" = 1 ] || { echo "Viceroy did not become ready"; tail -20 /tmp/mhs-gateway-viceroy.log; exit 1; }
+[ "$ready" = 1 ] || { echo "Viceroy did not become ready"; tail -20 "$LOGDIR/viceroy.log"; exit 1; }
 
 # --- 1. tools/list -------------------------------------------------------
 note "tools/list"
