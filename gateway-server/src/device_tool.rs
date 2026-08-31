@@ -40,6 +40,11 @@ pub struct DeviceToolConfig {
     pub tool_title: Option<String>,
     pub tool_description: String,
     pub input_schema: Value,
+    /// The MHS driver's response is validated against this before being
+    /// returned to the caller (see `DeviceToolHandler::call`) — required, not
+    /// optional, so a device tool can't be added without one and end up
+    /// relaying an unconstrained driver response into the agent's context.
+    pub output_schema: Value,
     pub required_scopes: Vec<String>,
     pub backend_name: String,
     pub max_calls_per_window: u32,
@@ -85,7 +90,7 @@ impl ToolHandler for DeviceToolHandler {
             title: self.config.tool_title.clone(),
             description: self.config.tool_description.clone(),
             input_schema: self.config.input_schema.clone(),
-            output_schema: None,
+            output_schema: Some(self.config.output_schema.clone()),
         }
     }
 
@@ -177,8 +182,29 @@ impl ToolHandler for DeviceToolHandler {
         );
         match self.proxy.forward(&request) {
             Ok(resp) if (200..300).contains(&resp.status) => {
-                let _ = self.audit.record(&audit_event(AuditDecision::Allowed));
-                Ok(ToolOutcome::Complete(CallResult::text(String::from_utf8_lossy(&resp.body).into_owned())))
+                // Parse before trusting: the raw bytes never reach the
+                // client directly. What's returned is built from the parsed
+                // value, and mcp-core's existing output-schema validator
+                // (already wired via `definition()`'s output_schema) rejects
+                // it downstream if it doesn't match the declared shape —
+                // closing the driver response the same way undeclared
+                // request arguments were closed off.
+                match serde_json::from_slice::<Value>(&resp.body) {
+                    Ok(parsed) => {
+                        let _ = self.audit.record(&audit_event(AuditDecision::Allowed));
+                        let text = serde_json::to_string(&parsed).unwrap_or_default();
+                        Ok(ToolOutcome::Complete(CallResult::text(text).with_structured(parsed)))
+                    }
+                    Err(_) => {
+                        eprintln!("mhs backend returned a non-JSON body [{correlation_id}]");
+                        let _ = self
+                            .audit
+                            .record(&audit_event(AuditDecision::DeviceRejected { status: resp.status }));
+                        Ok(ToolOutcome::Complete(CallResult::tool_error(format!(
+                            "device response was not usable (correlation id: {correlation_id})"
+                        ))))
+                    }
+                }
             }
             Ok(resp) => {
                 eprintln!("mhs backend returned status {} [{correlation_id}]", resp.status);
@@ -295,6 +321,12 @@ mod tests {
                 "properties": { "celsius": { "type": "number" } },
                 "required": ["celsius"]
             }),
+            output_schema: json!({
+                "type": "object",
+                "properties": { "status": { "type": "string" } },
+                "required": ["status"],
+                "additionalProperties": false
+            }),
             required_scopes: vec!["mcp:mhs:qpcr-1:set_temperature".into()],
             backend_name: "mhs_driver".into(),
             max_calls_per_window: 10,
@@ -345,8 +377,11 @@ mod tests {
         }
     }
 
-    fn ok_response(text: &str) -> Result<ProxyResponse, ProxyError> {
-        Ok(ProxyResponse { status: 200, body: text.as_bytes().to_vec() })
+    /// A 2xx response whose body is a valid, schema-conforming JSON object
+    /// (`{"status": "<status>"}`) — matching what `config()`'s output_schema
+    /// declares.
+    fn ok_response(status: &str) -> Result<ProxyResponse, ProxyError> {
+        Ok(ProxyResponse { status: 200, body: json!({ "status": status }).to_string().into_bytes() })
     }
 
     #[test]
@@ -358,7 +393,7 @@ mod tests {
             mcp_core::router::ToolOutcome::Complete(r) => {
                 let v = serde_json::to_value(&r).unwrap();
                 assert_eq!(v["isError"], false);
-                assert_eq!(v["content"][0]["text"], "ok");
+                assert_eq!(v["structuredContent"]["status"], "ok");
             }
             _ => panic!("expected Complete"),
         }
@@ -450,6 +485,32 @@ mod tests {
             AuditDecision::DeviceRejected { status } => assert_eq!(status, 500),
             ref other => panic!("expected DeviceRejected, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn non_json_2xx_body_is_treated_as_unusable_not_relayed_verbatim() {
+        // A 2xx response whose body isn't even valid JSON must not be
+        // wrapped verbatim into the client-facing result -- the raw bytes
+        // never reach `CallResult::text`.
+        let (h, audit, _proxy, _rate) = handler(
+            Ok(Some(celsius_limits())),
+            Ok(true),
+            Ok(ProxyResponse { status: 200, body: b"<html>not json</html>".to_vec() }),
+        );
+        let ctx = ctx_with(Some(a_principal()));
+        let outcome = h.call(&ctx, &json!({ "celsius": 37.0 })).unwrap();
+        match outcome {
+            mcp_core::router::ToolOutcome::Complete(r) => {
+                let v = serde_json::to_value(&r).unwrap();
+                assert_eq!(v["isError"], true);
+                let text = v["content"][0]["text"].as_str().unwrap();
+                assert!(!text.contains("<html>"), "raw unparseable body must not be relayed: {text}");
+            }
+            _ => panic!("expected Complete"),
+        }
+        let events = audit.events.borrow();
+        assert_eq!(events.len(), 2);
+        assert!(matches!(events[1].decision, AuditDecision::DeviceRejected { status: 200 }));
     }
 
     #[test]

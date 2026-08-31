@@ -39,6 +39,19 @@ pub fn register_handlers(router: &mut Router) {
         .register_tool(robot_arm_move_joint(&registry_base_url, &driver_base_url));
 }
 
+/// Both demo tools' driver acknowledgement is expected to be exactly
+/// `{"status": "..."}` — closed, so an unexpected extra field in the
+/// driver's response fails central output validation (mcp-core) instead of
+/// being relayed into the agent's context unconstrained.
+fn ack_output_schema() -> serde_json::Value {
+    json!({
+        "type": "object",
+        "properties": { "status": { "type": "string" } },
+        "required": ["status"],
+        "additionalProperties": false
+    })
+}
+
 fn registry_for(base_url: &str) -> DeviceRegistry<KvLimitsCache, BackendLimitsSource> {
     DeviceRegistry::new(
         KvLimitsCache,
@@ -68,6 +81,7 @@ fn qpcr_set_temperature(registry_base_url: &str, driver_base_url: &str) -> Devic
                 "required": ["celsius"],
                 "additionalProperties": false
             }),
+            output_schema: ack_output_schema(),
             required_scopes: vec!["mcp:mhs:qpcr-1:set_temperature".into()],
             backend_name: "mhs_driver".into(),
             max_calls_per_window: 10,
@@ -97,6 +111,7 @@ fn robot_arm_move_joint(registry_base_url: &str, driver_base_url: &str) -> Devic
                 "required": ["axis", "angle_degrees"],
                 "additionalProperties": false
             }),
+            output_schema: ack_output_schema(),
             required_scopes: vec!["mcp:mhs:robot-arm-2:move_joint".into()],
             backend_name: "mhs_driver".into(),
             max_calls_per_window: 5,

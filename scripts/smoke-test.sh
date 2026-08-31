@@ -96,8 +96,9 @@ assert_eq "lists move_joint, set_temperature" "$TOOLS" "move_joint,set_temperatu
 note "tools/call set_temperature (within limits -> proxied)"
 RES=$(rpc "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"set_temperature\",\"arguments\":{\"celsius\":37},$META}}")
 assert_eq "completes, not an error" "$(echo "$RES" | jq -r '.result.isError')" "false"
-BACKEND_TOOL=$(echo "$RES" | jq -r '.result.content[0].text' | jq -r '.received.tool')
-assert_eq "mock driver received the tool name" "$BACKEND_TOOL" "set_temperature"
+# Proves the response was parsed, validated against output_schema, and
+# returned as structured content -- not the raw driver bytes relayed as-is.
+assert_eq "driver ack validated as structured content" "$(echo "$RES" | jq -r '.result.structuredContent.status')" "ok"
 
 # --- 3. safety policy: Range limit denial --------------------------------
 note "tools/call set_temperature (out of range -> safety denial)"

@@ -5,7 +5,10 @@ integrate against yet, so this mocks the two HTTP endpoints gateway-server's
 BackendLimitsSource / FastlyBackendProxy call:
 
   GET  /mhs/devices/<device_id>/limits  -> DeviceLimits JSON, or 404
-  POST /mhs/tool-call                   -> echoes the received body back
+  POST /mhs/tool-call                   -> {"status": "ok"} (matches
+                                            DeviceToolConfig::output_schema --
+                                            a real driver's ack shouldn't need
+                                            to echo the whole request back)
 """
 
 import http.server
@@ -49,13 +52,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", "0"))
-        body = self.rfile.read(length)
+        self.rfile.read(length)  # drain the body; a real ack doesn't echo it
         if self.path == "/mhs/tool-call":
-            try:
-                received = json.loads(body)
-            except ValueError:
-                received = None
-            self._send_json(200, {"status": "ok", "received": received})
+            self._send_json(200, {"status": "ok"})
             return
         self.send_response(404)
         self.end_headers()

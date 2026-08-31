@@ -62,9 +62,12 @@ pub trait BackendProxy {
 
 /// Hard cap on a backend response body, mirroring `mcp-fastly`'s JWKS-fetch
 /// size guard: bound untrusted response bodies before reading them into
-/// memory, whatever the driver backend claims via `Content-Length`.
+/// memory, whatever the driver backend claims via `Content-Length`. A device
+/// acknowledgement is a small, closed-schema JSON object (see
+/// `DeviceToolConfig::output_schema`) — 8 KiB is ample headroom without
+/// giving a misbehaving driver a large channel into the agent's context.
 #[cfg(target_arch = "wasm32")]
-const MAX_RESPONSE_BYTES: usize = 1_048_576;
+const MAX_RESPONSE_BYTES: usize = 8192;
 
 /// The real Fastly-backed proxy: a thin adapter with no independent logic —
 /// what's testable ([`build_request`]) is covered above. Keep the backend's
